@@ -113,7 +113,14 @@
     el.alert.hidden = false;
   }
 
-  function hideAlert() { el.alert.hidden = true; clear(el.alert); }
+  function hideAlert() {
+    // If a keyboard user just pressed the alert's retry button, keep focus near the file controls
+    // instead of dropping it to the top of the page.
+    var hadFocus = el.alert.contains(document.activeElement);
+    el.alert.hidden = true;
+    clear(el.alert);
+    if (hadFocus) (el.fileInput.disabled ? el.example : el.fileInput).focus();
+  }
 
   function showFileError(message) {
     el.fileError.textContent = message;
@@ -133,8 +140,12 @@
 
   /* ---------- config ---------- */
 
-  function loadConfig() {
-    setStatus("Connecting to the local app…", true);
+  // keepAlert: refresh the token quietly without replacing a request error the user still needs to read.
+  // A refresh only touches the status, alert and file chooser if no newer request, retry or Clear has
+  // happened since it started (state.seq unchanged); a stale success still keeps the fresh token.
+  function loadConfig(keepAlert) {
+    var seq = state.seq;
+    if (!keepAlert) setStatus("Connecting to the local app…", true);
     return fetch("/api/config", { headers: { Accept: "application/json" }, credentials: "omit", cache: "no-store" })
       .then(function (res) {
         if (!res.ok) throw new Error("status " + res.status);
@@ -148,16 +159,20 @@
         el.limitCols.textContent = fmtInt(cfg.max_columns);
         el.version.textContent = cfg.version ? "Version " + cfg.version : "";
         el.fileInput.disabled = false;
-        hideAlert();
-        if (!state.result) setStatus("Ready.", false);
+        if (!keepAlert && seq === state.seq) {
+          hideAlert();
+          if (!state.result) setStatus("Ready.", false);
+        }
         return cfg;
       })
       .catch(function () {
+        if (seq !== state.seq) return null;
         state.config = null;
         el.fileInput.disabled = true;
         setStatus("Not connected.", false);
         showAlert("Couldn't reach the local Table Notes app. Check that it is still running in your terminal, then try again.",
-          { label: "Try again", run: loadConfig });
+          { label: "Try again", run: function () { loadConfig(); } });
+        return null;
       });
   }
 
@@ -185,20 +200,39 @@
     });
   }
 
-  function handleResponse(req, sourceLabel) {
+  // Clear the chooser after a failed upload: browsers don't fire "change" when the same file is
+  // picked again, so a user who fixes the file or waits would otherwise have no way to resend it.
+  function failed(sourceLabel) {
+    el.fileInput.value = "";
+    setStatus("Couldn't analyze " + sourceLabel + ".", false);
+  }
+
+  function handleResponse(req, sourceLabel, retry) {
     return function (out) {
       if (!isCurrent(req)) return;
       state.controller = null;
       if (!out.res.ok) {
-        var detail = out.data && out.data.detail;
-        setStatus("Couldn't analyse " + sourceLabel + ".", false);
-        showAlert(friendlyHttpError(out.res.status, detail));
-        if (out.res.status === 403) loadConfig();
+        var status = out.res.status;
+        failed(sourceLabel);
+        if (status === 403) {
+          // Usually the local app restarted and issued a new request token. Fetch the new token, then
+          // explain and offer a retry. (If that fails, loadConfig shows the connection error itself.)
+          setStatus("Reconnecting to the local app…", true);
+          loadConfig(true).then(function (cfg) {
+            if (!cfg || !isCurrent(req)) return;
+            setStatus("Couldn't analyze " + sourceLabel + ".", false);
+            showAlert("The local app didn't accept the request, probably because it restarted. This page has reconnected, so try again.",
+              { label: "Try again", run: retry });
+          });
+          return;
+        }
+        var retryable = status === 408 || status === 429 || status >= 500;
+        showAlert(friendlyHttpError(status, out.data && out.data.detail), retryable ? { label: "Try again", run: retry } : null);
         return;
       }
       if (!out.data || typeof out.data !== "object") {
-        setStatus("Couldn't analyse " + sourceLabel + ".", false);
-        showAlert("The local app sent back a response Table Notes couldn't read. Try again.");
+        failed(sourceLabel);
+        showAlert("The local app sent back a response Table Notes couldn't read. Try again.", { label: "Try again", run: retry });
         return;
       }
       render(out.data);
@@ -207,13 +241,14 @@
     };
   }
 
-  function handleFailure(req, sourceLabel) {
+  function handleFailure(req, sourceLabel, retry) {
     return function (err) {
       if (!isCurrent(req)) return; // superseded by a newer request or a reset
       state.controller = null;
       if (err && err.name === "AbortError") return;
-      setStatus("Couldn't analyse " + sourceLabel + ".", false);
-      showAlert("Couldn't reach the local Table Notes app. Check that it is still running, then try again.");
+      failed(sourceLabel);
+      showAlert("Couldn't reach the local Table Notes app. Check that it is still running, then try again.",
+        { label: "Try again", run: retry });
     };
   }
 
@@ -222,8 +257,21 @@
     var req = beginRequest("Opening the sample table…");
     fetch("/api/example", { headers: { Accept: "application/json" }, credentials: "omit", cache: "no-store", signal: req.signal })
       .then(readJson)
-      .then(handleResponse(req, "the sample table"))
-      .catch(handleFailure(req, "the sample table"));
+      .then(handleResponse(req, "the sample table", runExample))
+      .catch(handleFailure(req, "the sample table", runExample));
+  }
+
+  // The retry button holds the File only while its alert is on screen; Clear or any new request
+  // removes the alert and with it this reference. A fresh token is fetched first in case the app restarted.
+  // Each press starts a new generation, so Clear, a newer request or a second press while the token is
+  // loading cancels this resend instead of letting it bring back or replace something.
+  function retryFile(file) {
+    return function () {
+      state.seq += 1;
+      var seq = state.seq;
+      setStatus("Reconnecting to the local app…", true);
+      loadConfig(true).then(function (cfg) { if (cfg && seq === state.seq) runFile(file); });
+    };
   }
 
   function checkFile(file) {
@@ -260,8 +308,8 @@
       signal: req.signal
     })
       .then(readJson)
-      .then(handleResponse(req, "your file"))
-      .catch(handleFailure(req, "your file"));
+      .then(handleResponse(req, "your file", retryFile(file)))
+      .catch(handleFailure(req, "your file", retryFile(file)));
   }
 
   /* ---------- reset ---------- */
@@ -490,8 +538,12 @@
     var root = svg("svg", { viewBox: "0 0 " + width + " " + height, width: width, height: height, role: "img", "aria-labelledby": "chart-svg-title chart-svg-desc" });
     root.appendChild(svg("title", { id: "chart-svg-title" }, "Line chart of " + name));
     var dirWords = directionWords(s.direction);
+    var total = isNum(s.observations) && s.observations > points.length ? s.observations : null;
+    var countText = total
+      ? "Showing " + fmtInt(points.length) + " evenly spaced of " + plural(total, "value", "values")
+      : plural(points.length, "value", "values");
     root.appendChild(svg("desc", { id: "chart-svg-desc" },
-      points.length + " values" + (s.date_column ? " ordered by " + cellText(s.date_column) : " in file order") +
+      countText + (s.date_column ? " ordered by " + cellText(s.date_column) : " in file order") +
       (dirWords ? ", " + dirWords + " overall" : "") + ". A text table of the values follows the chart."));
 
     ticks.forEach(function (t) {
@@ -540,8 +592,7 @@
 
     var caption = make("p", { cls: "chart-caption" });
     var parts = [];
-    var total = isNum(s.observations) && s.observations > points.length ? s.observations : null;
-    parts.push((total ? "Showing " + fmtInt(points.length) + " evenly spaced of " + plural(total, "value", "values") : plural(points.length, "value", "values")) +
+    parts.push(countText +
       (s.date_column ? " ordered by " + cellText(s.date_column) : " in file order") + ".");
     if (dirWords) parts.push("Overall direction: " + dirWords + (isNum(s.slope) ? " (about " + fmtNum(s.slope) + " per step)." : "."));
     caption.appendChild(document.createTextNode(parts.join(" ")));
@@ -576,7 +627,7 @@
   function buildSummary(data, includeName) {
     var out = {
       generated_by: "Table Notes" + (state.config && state.config.version ? " " + state.config.version : ""),
-      contents: "Column names, counts, statistics, notes and trend lines. Preview rows and chart points are left out.",
+      contents: "Column names, counts, statistics, notes and each numeric column's trend direction and slope. Minimum and maximum are actual values from the table. Preview rows, chart points and extension values are left out.",
       is_example: !!data.is_example,
       shape: data.shape || null,
       quality: data.quality || null,

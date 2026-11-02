@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "table-notes"
-version = "0.1.0"
+version = "0.1.1"
 description = "Explore CSV and Excel tables on your own computer."
 requires-python = ">=3.11"
 license = "MIT"

@@ -61,6 +61,22 @@ class AnalysisTests(unittest.TestCase):
         self.assertIn("precision", result["quality"]["warnings"][0])
         self.assertEqual(result["series"], [])
 
+    def test_fraction_above_safe_range_has_precision_warning(self):
+        result = analyze(b"amount\n9007199254740991.1\n", "data.csv")
+        self.assertEqual(result["columns"][0]["kind"], "text")
+        self.assertTrue(any("precision" in warning for warning in result["quality"]["warnings"]))
+
+    def test_tiny_numbers_are_not_silently_reported_as_zero(self):
+        result = analyze(b"amount\n1e-4000\n2e-4000\n", "data.csv")
+        self.assertEqual(result["columns"][0]["kind"], "text")
+        self.assertIsNone(result["columns"][0]["stats"])
+        self.assertEqual(result["preview"]["rows"][0][0], "1e-4000")
+        self.assertTrue(any("too small" in warning for warning in result["quality"]["warnings"]))
+
+    def test_extreme_exponent_is_a_safe_input_error(self):
+        with self.assertRaises(TableError):
+            analyze(b"amount\n1e-" + b"9" * 200 + b"\n", "data.csv")
+
     def test_camel_case_ids_do_not_create_trend_lines(self):
         result = analyze(
             b"customerId,accountNumber,SKU,amount\n123,456,789,2\n124,457,790,3\n", "data.csv"

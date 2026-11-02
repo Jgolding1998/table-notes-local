@@ -10,7 +10,7 @@ import re
 import statistics
 import zipfile
 from datetime import date, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 MAX_FILE_BYTES = 5 * 1024 * 1024
 MAX_ROWS = 20_000
@@ -162,20 +162,30 @@ def parse_table(data: bytes, filename: str):
         ) from None
 
 
-def _number(value):
+def _parse_number(value):
     if isinstance(value, bool) or value is None:
-        return None
+        return None, None
     if isinstance(value, (int, float)):
-        return value if abs(value) <= MAX_SAFE_INTEGER else None
+        return (value, None) if abs(value) <= MAX_SAFE_INTEGER else (None, "precision")
     value = str(value).strip()
     if not NUMBER.fullmatch(value) or re.match(r"[+-]?0\d", value):
-        return None
+        return None, None
+    try:
+        decimal = Decimal(value)
+    except InvalidOperation:
+        raise TableError("A number has an unsupported exponent. Use a smaller exponent.") from None
     number = float(value)
     if not math.isfinite(number) or abs(number) > 1e100:
         raise TableError("A number is outside the supported finite range (-1e100 to 1e100).")
-    if abs(Decimal(value)) > MAX_SAFE_INTEGER:
-        return None
-    return int(value) if re.fullmatch(r"[+-]?\d+", value) else number
+    if decimal.copy_abs() > MAX_SAFE_INTEGER:
+        return None, "precision"
+    if decimal and number == 0:
+        return None, "underflow"
+    return (int(value) if re.fullmatch(r"[+-]?\d+", value) else number), None
+
+
+def _number(value):
+    return _parse_number(value)[0]
 
 
 def _date(value):
@@ -203,7 +213,8 @@ def analyze(data: bytes, filename: str, *, is_example=False):
             isinstance(value, str) and value.lstrip().startswith("=") for value in values
         )
         identifier = IDENTIFIER.search(re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", name))
-        numbers = [_number(value) for value in values] if values and not identifier else []
+        parsed = [_parse_number(value) for value in values] if values and not identifier else []
+        numbers = [number for number, _ in parsed]
         if not values:
             kind = "empty"
         elif all(
@@ -255,14 +266,14 @@ def analyze(data: bytes, filename: str, *, is_example=False):
                 "stats": stats,
             }
         )
-        if kind == "text" and any(
-            isinstance(value, str)
-            and NUMBER.fullmatch(value.strip())
-            and abs(float(value)) > MAX_SAFE_INTEGER
-            for value in values
-        ):
+        if any(issue == "precision" for _, issue in parsed):
             warnings.append(
                 f"Column '{name}' contains numbers beyond safe browser precision and is kept as text."
+            )
+        if any(issue == "underflow" for _, issue in parsed):
+            warnings.append(
+                f"Column '{name}' contains numbers too small to analyze without rounding to zero "
+                "and is kept as text."
             )
     if formula_cells:
         warnings.append(

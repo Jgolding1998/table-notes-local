@@ -206,13 +206,27 @@ def unpack_file(body, content_type):
 
 @app.post("/api/analyze")
 async def analyze_file(request: Request):
+    if not ANALYSIS_SLOTS.acquire(blocking=False):
+        raise HTTPException(429, "Two tables are already being analyzed. Try again shortly.")
     try:
         data, filename = unpack_file(await request.body(), request.headers.get("content-type", ""))
-        if not ANALYSIS_SLOTS.acquire(blocking=False):
-            raise HTTPException(429, "Two tables are already being analyzed. Try again shortly.")
-        try:
-            return await asyncio.to_thread(analyze, data, filename)
-        finally:
-            ANALYSIS_SLOTS.release()
+        worker = asyncio.get_running_loop().run_in_executor(None, analyze, data, filename)
+    except TableError as error:
+        ANALYSIS_SLOTS.release()
+        raise HTTPException(422, str(error)) from None
+    except BaseException:
+        ANALYSIS_SLOTS.release()
+        raise
+    worker.add_done_callback(_finish_analysis)
+    try:
+        # A canceled request must not free a slot while its parser is still running.
+        return await asyncio.shield(worker)
     except TableError as error:
         raise HTTPException(422, str(error)) from None
+
+
+def _finish_analysis(worker):
+    ANALYSIS_SLOTS.release()
+    if not worker.cancelled():
+        # Retrieve errors even if the client canceled its waiting request.
+        worker.exception()

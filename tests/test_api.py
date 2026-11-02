@@ -1,11 +1,12 @@
 import asyncio
+import threading
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from table_notes.app import ANALYSIS_SLOTS, TOKEN, LocalBoundary, app
+from table_notes.app import ANALYSIS_SLOTS, TOKEN, LocalBoundary, analyze_file, app
 
 
 class ApiTests(unittest.TestCase):
@@ -78,11 +79,64 @@ class ApiTests(unittest.TestCase):
         ANALYSIS_SLOTS.acquire()
         ANALYSIS_SLOTS.acquire()
         try:
-            self.assertEqual(self.upload().status_code, 429)
+            with patch("table_notes.app.unpack_file", side_effect=AssertionError("Busy parser ran")):
+                self.assertEqual(self.upload().status_code, 429)
         finally:
             ANALYSIS_SLOTS.release()
             ANALYSIS_SLOTS.release()
         self.assertEqual(self.upload().status_code, 200)
+
+    def test_invalid_upload_releases_processing_slot(self):
+        for _ in range(3):
+            self.assertEqual(self.upload(b"duplicate,duplicate\n1,2\n").status_code, 422)
+        self.assertEqual(self.upload().status_code, 200)
+
+    def test_extreme_exponent_returns_safe_input_error(self):
+        response = self.upload(b"amount\n1e-" + b"9" * 200 + b"\n")
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("exponent", response.json()["detail"])
+        self.assertNotIn("InvalidOperation", response.text)
+
+    def test_canceled_request_keeps_slot_until_worker_finishes(self):
+        started, finish = threading.Event(), threading.Event()
+
+        def blocking_analysis(*args):
+            started.set()
+            if not finish.wait(5):
+                raise AssertionError("Test did not release parser")
+            return {"ok": True}
+
+        async def scenario():
+            async def body():
+                return b"synthetic upload"
+
+            request = SimpleNamespace(body=body, headers={})
+            ANALYSIS_SLOTS.acquire()
+            task = None
+            try:
+                with (
+                    patch("table_notes.app.unpack_file", return_value=(b"a\n1", "sample.csv")),
+                    patch("table_notes.app.analyze", blocking_analysis),
+                ):
+                    task = asyncio.create_task(analyze_file(request))
+                    self.assertTrue(await asyncio.to_thread(started.wait, 5))
+                    task.cancel()
+                    with self.assertRaises(asyncio.CancelledError):
+                        await task
+                    acquired = ANALYSIS_SLOTS.acquire(blocking=False)
+                    if acquired:
+                        ANALYSIS_SLOTS.release()
+                    self.assertFalse(acquired, "Canceled request freed its running worker's slot")
+                    finish.set()
+                    self.assertTrue(await asyncio.to_thread(ANALYSIS_SLOTS.acquire, True, 5))
+                    ANALYSIS_SLOTS.release()
+            finally:
+                finish.set()
+                ANALYSIS_SLOTS.release()
+                if task is not None and not task.done():
+                    task.cancel()
+
+        asyncio.run(scenario())
 
     def test_absolute_upload_deadline_rejects_available_late_chunk(self):
         messages, invoked = [], []
