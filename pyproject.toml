@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling==1.33.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "table-notes"
+version = "0.1.0"
+description = "Explore CSV and Excel tables on your own computer."
+requires-python = ">=3.11"
+license = "MIT"
+readme = "README.md"
+authors = [{name = "Jgolding1998"}]
+dependencies = ["fastapi==0.162.0", "uvicorn==0.54.0", "openpyxl==3.1.5", "defusedxml==0.7.1"]
+
+[project.optional-dependencies]
+test = ["httpx==0.28.1"]
+
+[project.scripts]
+table-notes = "table_notes.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["table_notes"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "B"]

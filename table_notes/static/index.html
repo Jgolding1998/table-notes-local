@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Table Notes</title>
+  <link rel="icon" href="/assets/mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/assets/styles.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="masthead">
+    <div class="brand">
+      <img src="/assets/mark.svg" alt="" width="28" height="28">
+      <span class="brand-name">Table Notes</span>
+    </div>
+    <p class="locality">Runs on this computer. Files go only to the local app for processing; there is no cloud analysis.</p>
+  </header>
+
+  <main id="main" class="layout">
+    <section class="intake" aria-labelledby="intake-title">
+      <h1 id="intake-title">Read a table before you trust it</h1>
+      <p class="lede">Get row and column counts, gaps, duplicates, a profile of every column and a simple chart of numeric columns.</p>
+
+      <div class="intake-actions">
+        <button type="button" id="example-btn" class="btn btn-primary">Open the sample table</button>
+        <a id="sample-link" class="quiet-link" href="/examples/weekly-orders.csv" download>Download sample CSV</a>
+      </div>
+
+      <div class="drop" id="drop">
+        <label for="file-input" class="drop-label">Choose a CSV or Excel file</label>
+        <p class="hint" id="file-hint">.csv or .xlsx, up to <span id="limit-size">5 MB</span>, <span id="limit-rows">20,000</span> rows and <span id="limit-cols">60</span> columns. Only the first sheet of a workbook is read. You can also drop a file here.</p>
+        <p class="field-error" id="file-error" hidden></p>
+        <input type="file" id="file-input" accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" aria-describedby="file-hint file-error" disabled>
+      </div>
+
+      <div class="status-row">
+        <p id="status" class="status" role="status" aria-live="polite">Connecting to the local app…</p>
+        <button type="button" id="reset-btn" class="btn btn-quiet" disabled>Clear</button>
+      </div>
+      <div id="alert" class="alert" role="alert" hidden></div>
+    </section>
+
+    <section id="results" class="results" aria-labelledby="results-title" hidden>
+      <div class="results-head">
+        <h2 id="results-title" tabindex="-1"><span id="result-name"></span></h2>
+        <span id="result-tag" class="tag" hidden>Fictional sample</span>
+      </div>
+
+      <dl class="figures" id="figures"></dl>
+
+      <section class="block" aria-labelledby="notes-title">
+        <h3 id="notes-title">Notes</h3>
+        <ul class="notes" id="notes"></ul>
+      </section>
+
+      <section class="block" aria-labelledby="chart-title">
+        <div class="block-head">
+          <h3 id="chart-title">Numeric series</h3>
+          <div class="field-inline" id="metric-field" hidden>
+            <label for="metric">Column</label>
+            <select id="metric"></select>
+          </div>
+        </div>
+        <div id="chart-area"></div>
+      </section>
+
+      <section class="block" aria-labelledby="profile-title">
+        <h3 id="profile-title">Column profile</h3>
+        <div class="scroller" tabindex="0" role="region" aria-labelledby="profile-title">
+          <table class="data profile" id="profile"></table>
+        </div>
+      </section>
+
+      <section class="block" aria-labelledby="preview-title">
+        <h3 id="preview-title">Preview</h3>
+        <p class="hint" id="preview-hint"></p>
+        <div class="scroller" tabindex="0" role="region" aria-labelledby="preview-title">
+          <table class="data preview" id="preview"></table>
+        </div>
+      </section>
+
+      <section class="block export" aria-labelledby="export-title">
+        <h3 id="export-title">Save a summary</h3>
+        <p class="hint" id="export-hint">The JSON file contains column names, counts, statistics, notes and the chart's trend lines. It leaves out preview rows and chart points. Column names can be revealing, so read it before you share it.</p>
+        <div class="export-row">
+          <label class="check"><input type="checkbox" id="include-name"> Include the file name</label>
+          <button type="button" id="download-btn" class="btn" aria-describedby="export-hint">Download summary JSON</button>
+        </div>
+      </section>
+    </section>
+
+    <section id="empty" class="empty" aria-label="Nothing loaded">
+      <p>Nothing loaded yet. Open the sample to see what a report looks like, or choose one of your own files.</p>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <p>Counts and statistics use every accepted row. The chart shows up to 120 points per column. Trend lines are straight-line extensions, not forecasts you should rely on.</p>
+    <p id="version"></p>
+  </footer>
+
+  <script src="/assets/app.js" defer></script>
+</body>
+</html>
